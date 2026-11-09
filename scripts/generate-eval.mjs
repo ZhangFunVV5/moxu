@@ -1,0 +1,11 @@
+import { spawn } from 'node:child_process';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+const root=process.cwd();
+const out=path.join(root,'.tmp-generate-eval');
+await mkdir(out,{recursive:true});
+const bundle=path.join(out,'generate-eval.mjs');
+const run=(args)=>new Promise((resolve,reject)=>{const child=spawn(process.execPath,args,{cwd:root,stdio:'inherit',windowsHide:true});child.on('error',reject);child.on('exit',code=>resolve(code??1));});
+const built=await run([path.join(root,'node_modules/esbuild/bin/esbuild'),'scripts/generate-eval.ts','--bundle','--platform=node','--format=esm','--alias:electron=./tests/electron-stub.ts','--log-level=error',`--outfile=${bundle}`]);
+if(built!==0) process.exit(built);
+process.exit(await run([bundle]));

@@ -1,0 +1,46 @@
+{
+  "name": "book-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist-electron/main/index.js",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:desktop": "npm run dev",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --noEmit && vite build && node scripts/build.mjs",
+    "start": "electron .",
+    "test": "node scripts/test.mjs",
+    "test:electron": "node scripts/electron-test.mjs",
+    "test:p5": "node scripts/electron-p5-test.mjs",
+    "test:p5:real": "node scripts/electron-p5-real-test.mjs",
+    "package:win": "npm run build && node scripts/package-win.mjs"
+  },
+  "dependencies": {
+    "@codemirror/commands": "6.11.1",
+    "@codemirror/state": "6.5.2",
+    "@codemirror/view": "6.38.1",
+    "lucide-react": "0.468.0",
+    "markdown-it": "14.1.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@types/markdown-it": "14.2.0",
+    "@types/node": "22.13.10",
+    "@types/react": "19.0.10",
+    "@types/react-dom": "19.0.4",
+    "@vitejs/plugin-react": "4.3.4",
+    "electron": "45.2.3",
+    "esbuild": "0.28.2",
+    "playwright": "1.65.0",
+    "typescript": "5.7.3",
+    "vite": "6.4.5"
+  },
+  "allowScripts": {
+    "electron@45.2.3": true,
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true
+  }
+}

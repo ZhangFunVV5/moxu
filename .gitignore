@@ -1,0 +1,22 @@
+# 依赖与本地环境
+node_modules/
+.venv/
+
+# 构建产物与测试临时目录
+dist/
+dist-electron/
+release/
+artifacts/
+.tmp-test/
+.tmp-build/
+.npm-cache/
+.tmp-p2-electron/
+.tmp-p3-electron/
+.tmp-p4-electron/
+.tmp-generate-eval/
+.tmp-p5-*/
+
+# 任务与内部文档（不入库）
+task.md
+docs/
+/docs/deepseek official api.csv
