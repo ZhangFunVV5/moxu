@@ -18,7 +18,7 @@ export function proposeTask(
     message,
   });
   if (
-    /人物系统|剧情讨论|知识库|EPUB|云端同步|删除作品|上传|任意路径|润色|扩写|续写|翻译/i.test(
+    /人物系统|剧情讨论|知识库|云端同步|删除作品|上传|任意路径|润色|扩写|续写|翻译/i.test(
       prompt,
     )
   )
@@ -31,7 +31,7 @@ export function proposeTask(
         (part) =>
           positive.test(part) &&
           !new RegExp(
-            `(?:不要|无需|不需要|不|跳过)(?:生成|进行|做)?(?:${words})`,
+            `(?:不要|无需|不需要|不|跳过)\\s*(?:生成|进行|做)?\\s*(?:${words})`,
           ).test(part),
       );
   };
@@ -43,10 +43,14 @@ export function proposeTask(
     };
   if (enabled("标题|章名")) request.title = { ...DEFAULT_TITLE_OPTIONS };
   if (enabled("摘要|梗概")) request.summary = { ...DEFAULT_SUMMARY_OPTIONS };
-  if (enabled("排版|导出"))
+  if (enabled("排版|导出|EPUB"))
     request.format = {
       options: { ...defaultFormatOptions },
-      outputFormat: /markdown|\.md/i.test(prompt) ? "markdown" : "txt",
+      outputFormat: enabled("EPUB")
+        ? "epub"
+        : /markdown|\.md/i.test(prompt)
+          ? "markdown"
+          : "txt",
     };
   if (enabled("导出")) request.export = true;
   const size = prompt.match(

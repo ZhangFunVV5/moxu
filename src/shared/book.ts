@@ -9,8 +9,96 @@ import { chapterReviewStateSchema } from "./review-state";
  */
 export const SCHEMA_VERSION = 1 as const;
 
-export const BOOK_FORMATS = ["txt", "markdown"] as const;
-export type BookFormat = (typeof BOOK_FORMATS)[number];
+/**
+ * 来源、正文与导出格式是三个独立职责：
+ * - 来源格式记录用户导入的是什么文件；
+ * - 正文格式记录工作区章节 JSON 里的 body 如何派生段落（EPUB 一律转为 Markdown）；
+ * - 导出格式是本次输出的目标，可独立选择 EPUB。
+ * 旧工作区没有 bodyFormat 时按来源格式回退，语义与 v0.1.1 一致。
+ */
+export const SOURCE_FORMATS = ["txt", "markdown", "epub"] as const;
+export type SourceFormat = (typeof SOURCE_FORMATS)[number];
+/** 兼容旧引用：BookFormat 现在指来源格式。 */
+export type BookFormat = SourceFormat;
+export const BOOK_FORMATS = SOURCE_FORMATS;
+
+export const BODY_FORMATS = ["txt", "markdown"] as const;
+export type BodyFormat = (typeof BODY_FORMATS)[number];
+
+export const EXPORT_FORMATS = ["txt", "markdown", "epub"] as const;
+export type ExportFormat = (typeof EXPORT_FORMATS)[number];
+
+export const DEFAULT_BOOK_LANGUAGE = "zh";
+
+/** BCP 47 的宽松校验：zh、zh-CN、en-US；拒绝空白和路径字符。 */
+const LANGUAGE_PATTERN = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/;
+
+/** 导出与预览使用的完整元数据；title 默认取 bookTitle。 */
+export const bookMetadataSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    language: z.string().trim().regex(LANGUAGE_PATTERN, "语言需为 BCP 47 标记"),
+    authors: z.array(z.string().trim().min(1).max(200)).max(32).optional(),
+  })
+  .strict();
+export type BookMetadata = z.infer<typeof bookMetadataSchema>;
+
+/** 持久化在 book.json 的元数据子集：书名仍是 bookTitle，避免两份标题事实源。 */
+export const storedBookMetadataSchema = z
+  .object({
+    language: z.string().trim().regex(LANGUAGE_PATTERN, "语言需为 BCP 47 标记"),
+    authors: z.array(z.string().trim().min(1).max(200)).max(32).optional(),
+  })
+  .strict();
+export type StoredBookMetadata = z.infer<typeof storedBookMetadataSchema>;
+
+export const EPUB_TOC_SOURCES = ["nav", "ncx", "none"] as const;
+export type EpubTocSource = (typeof EPUB_TOC_SOURCES)[number];
+
+export const EPUB_VERSIONS = ["2", "3"] as const;
+export type EpubVersion = (typeof EPUB_VERSIONS)[number];
+
+/** 导入转换提示：任何不能完整转换的内容都按章节记录，不静默丢弃。 */
+export const CONVERSION_NOTICE_CODES = [
+  "image-dropped",
+  "media-dropped",
+  "table-flattened",
+  "footnote-flattened",
+  "ruby-flattened",
+  "inline-style-flattened",
+  "unsupported-content-flattened",
+  "internal-link-degraded",
+  "external-link-degraded",
+  "empty-chapter-skipped",
+  "nav-invalid-anchor",
+  "toc-target-outside-spine",
+  "toc-unreadable",
+  "non-text-spine-item",
+  "fonts-obfuscated-ignored",
+] as const;
+export type ConversionNoticeCode = (typeof CONVERSION_NOTICE_CODES)[number];
+
+export const conversionNoticeSchema = z
+  .object({
+    code: z.enum(CONVERSION_NOTICE_CODES),
+    count: z.number().int().positive(),
+    /** 0 基导入章序；空表示整书级提示。 */
+    chapters: z.array(z.number().int().nonnegative()).max(5000),
+    message: z.string().trim().min(1).max(500),
+  })
+  .strict();
+export type ConversionNotice = z.infer<typeof conversionNoticeSchema>;
+
+export const epubImportInfoSchema = z
+  .object({
+    kind: z.literal("epub"),
+    version: z.enum(EPUB_VERSIONS),
+    tocSource: z.enum(EPUB_TOC_SOURCES),
+    spineCount: z.number().int().nonnegative(),
+    notices: z.array(conversionNoticeSchema).max(200),
+  })
+  .strict();
+export type EpubImportInfo = z.infer<typeof epubImportInfoSchema>;
 
 export const CHAPTER_KINDS = [
   "chapter",
@@ -109,8 +197,10 @@ export const bookSourceSchema = z
     fileName: z.string().min(1),
     byteLength: z.number().int().nonnegative(),
     sha256: z.string().regex(/^[0-9a-f]{64}$/),
-    encoding: z.string().min(1),
-    eol: z.enum(["lf", "crlf"]),
+    /** 文本来源的整文件编码；EPUB 是 ZIP 容器，不记作文本编码。 */
+    encoding: z.string().min(1).optional(),
+    /** 文本来源的换行符；EPUB 不适用。 */
+    eol: z.enum(["lf", "crlf"]).optional(),
     copy: z.string().min(1),
   })
   .strict();
@@ -121,15 +211,40 @@ export const bookFileSchema = z
     schemaVersion: z.literal(SCHEMA_VERSION),
     workspaceId: z.string().uuid(),
     bookTitle: z.string().min(1).max(200),
-    format: z.enum(BOOK_FORMATS),
+    /** 来源格式；旧工作区只有 txt / markdown。 */
+    format: z.enum(SOURCE_FORMATS),
+    /** 正文表示；缺省时按来源格式回退，EPUB 导入必须显式写 markdown。 */
+    bodyFormat: z.enum(BODY_FORMATS).optional(),
     chapterOrder: z.array(z.string().min(1)).min(1),
     source: bookSourceSchema,
+    metadata: storedBookMetadataSchema.optional(),
     importSettings: importSettingsSchema,
+    importInfo: epubImportInfoSchema.optional(),
     createdAt: z.string().min(1),
     updatedAt: z.string().min(1),
   })
   .strict();
 export type BookFile = z.infer<typeof bookFileSchema>;
+
+/** 旧工作区缺少 bodyFormat：按原来源格式派生，保证既有编辑/精校语义不变。 */
+export function bodyFormatOf(
+  book: Pick<BookFile, "format" | "bodyFormat">,
+): BodyFormat {
+  if (book.bodyFormat) return book.bodyFormat;
+  return book.format === "markdown" ? "markdown" : "txt";
+}
+
+/** 组成完整导出元数据；title 始终取当前 bookTitle。 */
+export function bookMetadataOf(
+  book: Pick<BookFile, "bookTitle" | "metadata">,
+): BookMetadata {
+  const authors = book.metadata?.authors?.filter((author) => author.trim());
+  return {
+    title: book.bookTitle,
+    language: book.metadata?.language ?? DEFAULT_BOOK_LANGUAGE,
+    ...(authors && authors.length ? { authors: [...authors] } : {}),
+  };
+}
 
 export interface ChapterSummary {
   chapterId: string;
@@ -160,11 +275,14 @@ export interface WorkspaceInfo {
   workspaceId: string;
   root: string;
   bookTitle: string;
-  format: BookFormat;
+  format: SourceFormat;
+  bodyFormat: BodyFormat;
+  metadata: BookMetadata;
   chapterOrder: string[];
   chapters: ChapterSummary[];
   source: BookSource;
   importSettings: ImportSettings;
+  importInfo?: EpubImportInfo;
   createdAt: string;
   updatedAt: string;
 }

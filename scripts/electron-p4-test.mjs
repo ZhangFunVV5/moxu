@@ -214,6 +214,17 @@ try {
   assert.equal((await view(page, ids[1])).data.currentTitle, "第二章 旧信");
   evidence.batchPartialApply = true;
   await page.getByRole("button", { name: "保留原标题", exact: true }).click();
+  await until(async () => {
+    const current = await view(page, ids[0]);
+    const keepOriginal = page.getByRole("button", {
+      name: "保留原标题",
+      exact: true,
+    });
+    return (
+      current.data.currentTitle === original.data.title &&
+      keepOriginal.isEnabled()
+    );
+  });
   const batchTitles = await Promise.all(ids.map((id) => view(page, id)));
   for (const action of ["escape", "none", "reopen"]) {
     await page.getByTestId("generate-title").click();

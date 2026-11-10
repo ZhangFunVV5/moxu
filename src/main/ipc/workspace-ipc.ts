@@ -20,6 +20,7 @@ import {
   saveChapterRequestSchema,
 } from "../../shared/workspace-contracts";
 import { ImportError } from "../../core/import/import-pipeline";
+import { EpubError } from "../../core/import/epub/epub-error";
 import { DecodeError } from "../../core/import/encoding";
 import { WorkspaceError } from "../../core/workspace/book-store";
 import { TaskSpecError } from "../../agent/tasks/task-types";
@@ -54,6 +55,7 @@ function toFailure(error: unknown): Result<never> {
   if (
     error instanceof WorkspaceError ||
     error instanceof ImportError ||
+    error instanceof EpubError ||
     error instanceof DecodeError ||
     error instanceof WorkspaceServiceError ||
     error instanceof TaskSpecError ||

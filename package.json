@@ -1,6 +1,6 @@
 {
   "name": "book-workbench",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "main": "dist-electron/main/index.js",
@@ -20,6 +20,8 @@
     "@codemirror/commands": "6.11.1",
     "@codemirror/state": "6.5.2",
     "@codemirror/view": "6.38.1",
+    "@xmldom/xmldom": "0.9.12",
+    "fflate": "0.8.3",
     "lucide-react": "0.468.0",
     "markdown-it": "14.1.0",
     "react": "19.0.0",

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { proofreadOptionsSchema } from "./proofreading";
 import { titleOptionsSchema, summaryOptionsSchema } from "./generate";
 import { formatOptionsSchema } from "./format-options";
+import { bookMetadataSchema, EXPORT_FORMATS } from "./book";
 import type { Result } from "./contracts";
 export const pipelineStartSchema = z
   .object({
@@ -15,7 +16,8 @@ export const pipelineStartSchema = z
     format: z
       .object({
         options: formatOptionsSchema,
-        outputFormat: z.enum(["txt", "markdown"]),
+        outputFormat: z.enum(EXPORT_FORMATS),
+        metadata: bookMetadataSchema.optional(),
       })
       .strict()
       .optional(),

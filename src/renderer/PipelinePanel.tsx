@@ -6,6 +6,7 @@ import {
   DEFAULT_SUMMARY_OPTIONS,
 } from "../shared/generate";
 import { defaultFormatOptions } from "../shared/format-options";
+import type { BookMetadata, ExportFormat } from "../shared/book";
 import type {
   PipelineRecord,
   PipelineStartRequest,
@@ -96,12 +97,14 @@ export async function cancelWorkspaceTasks() {
 export function PipelinePanel({
   workspaceId,
   chapterIds,
+  metadata,
   dirty,
   onMessage,
   onUpdated,
 }: {
   workspaceId: string;
   chapterIds: string[];
+  metadata: BookMetadata;
   dirty: boolean;
   onMessage: (s: string) => void;
   onUpdated: () => void;
@@ -117,7 +120,7 @@ export function PipelinePanel({
     format: true,
     export: true,
   });
-  const [outputFormat, setOutputFormat] = useState<"txt" | "markdown">("txt");
+  const [outputFormat, setOutputFormat] = useState<ExportFormat>("txt");
   const [pending, setPending] = useState<Record<string, boolean>>({});
   const [activity, setActivity] = useState<
     Array<{ taskId: string; message: string }>
@@ -203,7 +206,11 @@ export function PipelinePanel({
     ...(steps.summary ? { summary: DEFAULT_SUMMARY_OPTIONS } : {}),
     ...(steps.format
       ? {
-          format: { options: defaultFormatOptions, outputFormat },
+          format: {
+            options: defaultFormatOptions,
+            outputFormat,
+            ...(outputFormat === "epub" ? { metadata } : {}),
+          },
           export: steps.export,
         }
       : {}),
@@ -237,13 +244,19 @@ export function PipelinePanel({
               <select
                 value={outputFormat}
                 onChange={(e) =>
-                  setOutputFormat(e.target.value as "txt" | "markdown")
+                  setOutputFormat(e.target.value as ExportFormat)
                 }
               >
                 <option value="txt">TXT</option>
                 <option value="markdown">Markdown</option>
+                <option value="epub">EPUB 3</option>
               </select>
             </label>
+            {outputFormat === "epub" ? (
+              <p className="bb-note">
+                EPUB 使用工作区已保存的书名、语言与作者；组合流程会冻结该元数据快照。
+              </p>
+            ) : null}
             <button
               data-testid="pipeline-start"
               className="bb-button primary"

@@ -2,7 +2,7 @@ import MarkdownIt from "markdown-it";
 import {
   type Block,
   type BlockKind,
-  type BookFormat,
+  type BodyFormat,
   type ParagraphMode,
 } from "../../shared/book";
 import { lineStartOffsets } from "../../shared/text-offsets";
@@ -115,7 +115,7 @@ function deriveMarkdownBlocks(body: string): Block[] {
  * 正文变化后重新生成；旧版本坐标由 bodyHash / revision 校验，不跨版本猜测。
  */
 export function deriveBlocks(
-  format: BookFormat,
+  format: BodyFormat,
   body: string,
   paragraphMode: ParagraphMode = "line",
 ): Block[] {

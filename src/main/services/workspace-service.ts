@@ -3,9 +3,11 @@ import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import {
-  type BookFormat,
+  type SourceFormat,
   type ChapterSummary,
   type WorkspaceInfo,
+  bodyFormatOf,
+  bookMetadataOf,
   toChapterDetail,
   toChapterSummary,
 } from "../../shared/book";
@@ -23,6 +25,13 @@ import {
   ImportError,
   type ImportOptions,
 } from "../../core/import/import-pipeline";
+import {
+  assembleEpubChapters,
+  buildEpubImportPreview,
+  parseEpub,
+  type ParsedEpub,
+} from "../../core/import/epub/parse";
+import { EpubError } from "../../core/import/epub/epub-error";
 import { DecodeError } from "../../core/import/encoding";
 import {
   createWorkspace,
@@ -43,7 +52,7 @@ const PREVIEW_TTL_MS = 30 * 60 * 1000;
 interface PendingSource {
   token: string;
   fileName: string;
-  format: BookFormat;
+  format: SourceFormat;
   bytes: Uint8Array;
   createdAt: number;
 }
@@ -51,8 +60,11 @@ interface PendingSource {
 interface PendingPreview {
   token: string;
   sourceToken: string;
-  options: ImportOptions;
+  kind: "text" | "epub";
+  options: ImportOptions | null;
   requiresChoice: boolean;
+  /** EPUB 预览绑定同一份解析结果，确认时按用户边界重新分组。 */
+  epub: ParsedEpub | null;
   createdAt: number;
 }
 
@@ -74,10 +86,11 @@ export class WorkspaceServiceError extends Error {
   }
 }
 
-function formatOf(fileName: string): BookFormat | null {
+function formatOf(fileName: string): SourceFormat | null {
   const extension = path.extname(fileName).toLowerCase();
   if (extension === ".txt") return "txt";
   if (extension === ".md" || extension === ".markdown") return "markdown";
+  if (extension === ".epub") return "epub";
   return null;
 }
 
@@ -103,6 +116,7 @@ export class WorkspaceService {
   private startupError: WorkspaceError | null = null;
   private sources = new Map<string, PendingSource>();
   private previews = new Map<string, PendingPreview>();
+  private epubCache = new Map<string, ParsedEpub>();
   private readonly recentFile: string;
   private readonly booksRoot: string;
   private readonly testSource?: string;
@@ -158,12 +172,17 @@ export class WorkspaceService {
       root: workspace.root,
       bookTitle: workspace.book.bookTitle,
       format: workspace.book.format,
+      bodyFormat: bodyFormatOf(workspace.book),
+      metadata: bookMetadataOf(workspace.book),
       chapterOrder: [...workspace.book.chapterOrder],
       chapters: workspace.chapterFiles.map((chapter) =>
         toChapterSummary(chapter, 0, "unchecked"),
       ),
       source: { ...workspace.book.source },
       importSettings: { ...workspace.book.importSettings },
+      ...(workspace.book.importInfo
+        ? { importInfo: structuredClone(workspace.book.importInfo) }
+        : {}),
       createdAt: workspace.book.createdAt,
       updatedAt: workspace.book.updatedAt,
     };
@@ -172,18 +191,33 @@ export class WorkspaceService {
   private prune(): void {
     const now = Date.now();
     for (const [token, source] of this.sources)
-      if (now - source.createdAt > SOURCE_TTL_MS) this.sources.delete(token);
+      if (now - source.createdAt > SOURCE_TTL_MS) {
+        this.sources.delete(token);
+        this.epubCache.delete(token);
+      }
     for (const [token, preview] of this.previews)
       if (now - preview.createdAt > PREVIEW_TTL_MS) this.previews.delete(token);
+    for (const token of this.epubCache.keys())
+      if (!this.sources.has(token)) this.epubCache.delete(token);
+  }
+
+  private parsedEpub(source: PendingSource): ParsedEpub {
+    const cached = this.epubCache.get(source.token);
+    if (cached) return cached;
+    const parsed = parseEpub({ fileName: source.fileName, bytes: source.bytes });
+    this.epubCache.set(source.token, parsed);
+    return parsed;
   }
 
   async chooseSource(win: BrowserWindow | null): Promise<SourceSelection | null> {
     let filePath = this.testSource;
     if (!filePath) {
       const options = {
-        title: "导入 TXT / Markdown 书籍",
+        title: "导入 TXT / Markdown / EPUB 书籍",
         properties: ["openFile" as const],
-        filters: [{ name: "书籍文本", extensions: ["txt", "md", "markdown"] }],
+        filters: [
+          { name: "书籍文件", extensions: ["txt", "md", "markdown", "epub"] },
+        ],
       };
       const result = win
         ? await dialog.showOpenDialog(win, options)
@@ -195,7 +229,7 @@ export class WorkspaceService {
     if (!format)
       throw new WorkspaceServiceError(
         "UNSUPPORTED_FORMAT",
-        "只支持 TXT / Markdown 文件",
+        "只支持 TXT / Markdown / EPUB 文件",
       );
     const stat = await fsp.stat(filePath).catch(() => null);
     if (!stat || !stat.isFile())
@@ -231,6 +265,31 @@ export class WorkspaceService {
         "PREVIEW_EXPIRED",
         "导入来源已过期，请重新选择文件",
       );
+    if (source.format === "epub") {
+      if (request.kind !== "epub")
+        throw new WorkspaceServiceError(
+          "UNSUPPORTED_FORMAT",
+          "EPUB 来源不接受整文件编码或文本分章参数",
+        );
+      const parsed = this.parsedEpub(source);
+      const preview = buildEpubImportPreview(parsed, request.boundaries);
+      const previewToken = randomUUID();
+      this.previews.set(previewToken, {
+        token: previewToken,
+        sourceToken: source.token,
+        kind: "epub",
+        options: null,
+        requiresChoice: false,
+        epub: parsed,
+        createdAt: Date.now(),
+      });
+      return { ...preview, previewToken };
+    }
+    if (request.kind !== "text")
+      throw new WorkspaceServiceError(
+        "UNSUPPORTED_FORMAT",
+        "文本来源需要编码与文本分章参数",
+      );
     if (request.encoding && !isSupportedEncoding(request.encoding))
       throw new WorkspaceServiceError("ENCODING_UNSUPPORTED", "不支持的编码");
     const options: ImportOptions = {
@@ -248,8 +307,10 @@ export class WorkspaceService {
     this.previews.set(previewToken, {
       token: previewToken,
       sourceToken: source.token,
+      kind: "text",
       options,
       requiresChoice: preview.requiresChoice,
+      epub: null,
       createdAt: Date.now(),
     });
     return { ...preview, previewToken };
@@ -268,6 +329,59 @@ export class WorkspaceService {
       throw new WorkspaceServiceError(
         "PREVIEW_EXPIRED",
         "导入来源已过期，请重新选择文件",
+      );
+    if (source.format === "epub" || preview.kind === "epub") {
+      if (!preview.epub)
+        throw new WorkspaceServiceError(
+          "PREVIEW_EXPIRED",
+          "EPUB 解析结果已过期，请重新预览",
+        );
+      const parsed = preview.epub;
+      const assembled = assembleEpubChapters(
+        parsed,
+        request.boundaries,
+        request.titles ?? {},
+      );
+      const root = path.join(
+        this.booksRoot,
+        `${slugTitle(request.bookTitle)}-${randomUUID().slice(0, 8)}`,
+      );
+      const workspace = await createWorkspace({
+        root,
+        bookTitle: request.bookTitle,
+        format: "epub",
+        bodyFormat: "markdown",
+        source: {
+          fileName: source.fileName,
+          bytes: source.bytes,
+        },
+        metadata: {
+          language: parsed.metadata.language,
+          ...(parsed.metadata.authors
+            ? { authors: [...parsed.metadata.authors] }
+            : {}),
+        },
+        importSettings: {
+          splitMode: "auto",
+          paragraphMode: "line",
+          headingLevel: 0,
+          boundaries: [...request.boundaries],
+        },
+        chapters: assembled.chapters,
+        importInfo: {
+          kind: "epub",
+          version: parsed.version,
+          tocSource: parsed.tocSource,
+          spineCount: parsed.spineCount,
+          notices: assembled.notices,
+        },
+      });
+      await this.finishImport(workspace, source.token);
+      return this.toInfo(workspace);
+    }
+    if (!preview.options)      throw new WorkspaceServiceError(
+        "PREVIEW_EXPIRED",
+        "导入预览已过期，请重新预览",
       );
     if (preview.requiresChoice && preview.options.encoding === null)
       throw new WorkspaceServiceError(
@@ -302,13 +416,21 @@ export class WorkspaceService {
       },
       chapters: assembled.chapters,
     });
+    await this.finishImport(workspace, source.token);
+    return this.toInfo(workspace);
+  }
+
+  private async finishImport(
+    workspace: Workspace,
+    sourceToken: string,
+  ): Promise<void> {
     this.current = workspace;
     this.startupError = null;
-    this.sources.delete(source.token);
+    this.sources.delete(sourceToken);
+    this.epubCache.delete(sourceToken);
     for (const [token, pending] of this.previews)
-      if (pending.sourceToken === source.token) this.previews.delete(token);
+      if (pending.sourceToken === sourceToken) this.previews.delete(token);
     await this.remember(workspace.root, workspace.book.bookTitle);
-    return this.toInfo(workspace);
   }
 
   async open(win: BrowserWindow | null): Promise<WorkspaceInfo | null> {
@@ -333,6 +455,7 @@ export class WorkspaceService {
     this.startupError = null;
     this.sources.clear();
     this.previews.clear();
+    this.epubCache.clear();
     await this.remember(workspace.root, workspace.book.bookTitle);
     return this.toInfo(workspace);
   }
@@ -342,6 +465,7 @@ export class WorkspaceService {
     this.startupError = null;
     this.sources.clear();
     this.previews.clear();
+    this.epubCache.clear();
     return null;
   }
 
@@ -458,11 +582,17 @@ export class WorkspaceService {
 
 export function isKnownImportError(
   error: unknown,
-): error is WorkspaceError | ImportError | DecodeError | WorkspaceServiceError {
+): error is
+  | WorkspaceError
+  | ImportError
+  | DecodeError
+  | WorkspaceServiceError
+  | EpubError {
   return (
     error instanceof WorkspaceError ||
     error instanceof ImportError ||
     error instanceof DecodeError ||
-    error instanceof WorkspaceServiceError
+    error instanceof WorkspaceServiceError ||
+    error instanceof EpubError
   );
 }

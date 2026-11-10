@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { ChapterFile } from "../../shared/book";
+import { bodyFormatOf, type ChapterFile } from "../../shared/book";
 import {
   ProofreadError,
   type ChapterProofreadBatch,
@@ -330,7 +330,7 @@ export async function applyReviewOperation(
       batch.baseBody,
       batch.baseBlocks,
       acceptedPatches(batch.candidates, outcome.acceptedPatchIds),
-      book.format,
+      bodyFormatOf(book),
       book.importSettings.paragraphMode,
     );
     const nextRevision = review.reviewRevision + 1;
@@ -469,7 +469,7 @@ export async function undoLastReviewOperation(
       batch.baseBody,
       batch.baseBlocks,
       acceptedPatches(batch.candidates, acceptedPatchIds),
-      book.format,
+      bodyFormatOf(book),
       book.importSettings.paragraphMode,
     );
     const nextRevision = review.reviewRevision + 1;

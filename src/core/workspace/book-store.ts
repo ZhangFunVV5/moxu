@@ -5,12 +5,16 @@ import { z } from "zod";
 import {
   SCHEMA_VERSION,
   bookFileSchema,
+  bodyFormatOf,
   chapterFileSchema,
+  type BodyFormat,
   type BookFile,
-  type BookFormat,
   type ChapterFile,
   type ChapterKind,
+  type EpubImportInfo,
   type ImportSettings,
+  type SourceFormat,
+  type StoredBookMetadata,
 } from "../../shared/book";
 import { normalizeNewlines } from "../../shared/text-offsets";
 import { hashBody, sha256Hex } from "../text/hash";
@@ -227,7 +231,7 @@ export async function readChapterFile(
     chapterId,
   });
   const expectedBlocks = deriveBlocks(
-    book.format,
+    bodyFormatOf(book),
     chapter.body,
     book.importSettings.paragraphMode,
   );
@@ -307,27 +311,38 @@ export interface CreateWorkspaceChapterInput {
 export interface CreateWorkspaceInput {
   root: string;
   bookTitle: string;
-  format: BookFormat;
+  /** 来源格式：txt / markdown / epub。 */
+  format: SourceFormat;
+  /** 正文表示；缺省按来源格式回退，EPUB 必须显式指定 markdown。 */
+  bodyFormat?: BodyFormat;
   source: {
     fileName: string;
     bytes: Uint8Array;
-    encoding: string;
-    eol: "lf" | "crlf";
+    encoding?: string;
+    eol?: "lf" | "crlf";
   };
+  metadata?: StoredBookMetadata;
   importSettings: ImportSettings;
   chapters: CreateWorkspaceChapterInput[];
+  importInfo?: EpubImportInfo;
   now?: () => Date;
   fs?: AtomicWriteOptions["fs"];
 }
 
-function safeSourceName(fileName: string, format: BookFormat): string {
+function safeSourceName(fileName: string, format: SourceFormat): string {
   const base = path
     .basename(fileName)
     .replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_")
     .replace(/[. ]+$/g, "");
   const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+  const fallback =
+    format === "markdown"
+      ? "original.md"
+      : format === "epub"
+        ? "original.epub"
+        : "original.txt";
   if (!base || base === "." || base === ".." || reserved.test(base))
-    return format === "markdown" ? "original.md" : "original.txt";
+    return fallback;
   return base.slice(0, 120);
 }
 
@@ -344,6 +359,13 @@ export async function createWorkspace(
   const bookTitle = input.bookTitle.trim();
   if (!bookTitle)
     throw new WorkspaceError("INVALID_BOOK", "作品标题不能为空");
+  const bodyFormat: BodyFormat =
+    input.bodyFormat ?? (input.format === "markdown" ? "markdown" : "txt");
+  if (input.format === "epub" && bodyFormat !== "markdown")
+    throw new WorkspaceError(
+      "INVALID_BOOK",
+      "EPUB 来源的正文必须使用 Markdown 表示",
+    );
   const boundaries = input.importSettings.boundaries;
   if (
     boundaries.length === 0 ||
@@ -364,7 +386,7 @@ export async function createWorkspace(
         `第 ${index + 1} 章标题为空`,
       );
     const blocks = deriveBlocks(
-      input.format,
+      bodyFormat,
       chapter.body,
       input.importSettings.paragraphMode,
     );
@@ -428,7 +450,7 @@ export async function createWorkspace(
         },
         body,
         blocks: deriveBlocks(
-          input.format,
+          bodyFormat,
           body,
           input.importSettings.paragraphMode,
         ),
@@ -458,16 +480,19 @@ export async function createWorkspace(
       workspaceId,
       bookTitle,
       format: input.format,
+      bodyFormat,
       chapterOrder: chapterChapterFiles.map((chapter) => chapter.chapterId),
       source: {
         fileName: input.source.fileName,
         byteLength: input.source.bytes.byteLength,
         sha256: sourceHash,
-        encoding: input.source.encoding,
-        eol: input.source.eol,
+        ...(input.source.encoding ? { encoding: input.source.encoding } : {}),
+        ...(input.source.eol ? { eol: input.source.eol } : {}),
         copy,
       },
+      ...(input.metadata ? { metadata: input.metadata } : {}),
       importSettings: input.importSettings,
+      ...(input.importInfo ? { importInfo: input.importInfo } : {}),
       createdAt: iso,
       updatedAt: iso,
     };
@@ -514,7 +539,11 @@ export async function saveChapterBody(
       throw new WorkspaceError("INVALID_BODY", "单章正文超过长度上限");
     if (normalized === current.body) return current;
     if (hashBody(normalized) === current.bodyHash) return current;
-    const blocks = deriveBlocks(book.format, normalized, book.importSettings.paragraphMode);
+    const blocks = deriveBlocks(
+      bodyFormatOf(book),
+      normalized,
+      book.importSettings.paragraphMode,
+    );
     const problems = blockStructureProblems(normalized, blocks);
     if (problems.length)
       throw new WorkspaceError(

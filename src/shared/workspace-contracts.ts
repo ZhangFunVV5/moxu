@@ -1,36 +1,50 @@
 import { z } from "zod";
 import type { ChapterSummary } from "./book";
 import {
-  BOOK_FORMATS,
   PARAGRAPH_MODES,
+  SOURCE_FORMATS,
   SPLIT_MODES,
 } from "./book";
 import { TASK_TYPES, taskOptionsSchema } from "./task";
 import { SUPPORTED_ENCODINGS } from "./encoding";
-import type {
-  ImportPreview,
-} from "../core/import/import-pipeline";
+import type { ImportPreview } from "../core/import/import-pipeline";
 import type { ChapterDetail, WorkspaceInfo } from "./book";
 
 const chapterIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,80}$/, "非法章节 ID");
+const boundariesSchema = z.array(z.number().int().nonnegative()).min(1).max(5000);
 
-export const previewRequestSchema = z
+/** 文本来源需要整文件编码与文本分章参数；EPUB 由书籍结构决定，不接受这些参数。 */
+export const textPreviewRequestSchema = z
   .object({
+    kind: z.literal("text"),
     token: z.string().uuid(),
     encoding: z.enum(SUPPORTED_ENCODINGS).nullable(),
     splitMode: z.enum(SPLIT_MODES),
     paragraphMode: z.enum(PARAGRAPH_MODES),
     headingLevel: z.number().int().min(0).max(6),
-    boundaries: z.array(z.number().int().nonnegative()).min(1).max(5000).optional(),
+    boundaries: boundariesSchema.optional(),
   })
   .strict();
+export const epubPreviewRequestSchema = z
+  .object({
+    kind: z.literal("epub"),
+    token: z.string().uuid(),
+    boundaries: boundariesSchema.optional(),
+  })
+  .strict();
+export const previewRequestSchema = z.discriminatedUnion("kind", [
+  textPreviewRequestSchema,
+  epubPreviewRequestSchema,
+]);
+export type TextPreviewRequest = z.infer<typeof textPreviewRequestSchema>;
+export type EpubPreviewRequest = z.infer<typeof epubPreviewRequestSchema>;
 export type PreviewRequest = z.infer<typeof previewRequestSchema>;
 
 export const createWorkspaceRequestSchema = z
   .object({
     previewToken: z.string().uuid(),
     bookTitle: z.string().trim().min(1).max(200),
-    boundaries: z.array(z.number().int().nonnegative()).min(1).max(5000),
+    boundaries: boundariesSchema,
     titles: z.record(z.string(), z.string().max(200)).optional(),
   })
   .strict();
@@ -78,18 +92,20 @@ export interface PreparedTask {
   states: Record<string, string>;
 }
 
-export const bookFormatSchema = z.enum(BOOK_FORMATS);
+export const sourceFormatSchema = z.enum(SOURCE_FORMATS);
+export type SourceFormatValue = z.infer<typeof sourceFormatSchema>;
 
 export interface SourceSelection {
   token: string;
   fileName: string;
-  format: z.infer<typeof bookFormatSchema>;
+  format: SourceFormatValue;
   byteLength: number;
 }
 
-export interface ImportPreviewResponse extends ImportPreview {
+/** 文本与 EPUB 预览是两种内容；保留 previewToken 统一提交入口。 */
+export type ImportPreviewResponse = ImportPreview & {
   previewToken: string;
-}
+};
 
 export interface RecentWorkspace {
   root: string;

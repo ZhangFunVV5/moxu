@@ -1038,6 +1038,40 @@ body {
 #book-agent-blue .bb-import-settings .bb-field {
   margin-bottom: 10px;
 }
+#book-agent-blue .bb-import-source-meta {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  font-size: 11px;
+  color: var(--muted);
+}
+#book-agent-blue .bb-import-notices {
+  border: 1px solid #ead9b4;
+  background: var(--amber-tint);
+  border-radius: 6px;
+  padding: 9px 11px;
+  margin: 8px 0;
+  font-size: 12px;
+  color: var(--amber);
+}
+#book-agent-blue .bb-import-notices strong {
+  display: block;
+  margin-bottom: 4px;
+}
+#book-agent-blue .bb-import-notices ul {
+  margin: 0;
+  padding-left: 18px;
+}
+#book-agent-blue .bb-import-notices li {
+  margin: 2px 0;
+  line-height: 1.6;
+}
 #book-agent-blue .bb-import-error {
   color: var(--red);
   background: var(--red-tint);
@@ -1178,6 +1212,13 @@ body {
 #book-agent-blue .bb-format-form input:not([type=checkbox]) { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 #book-agent-blue .bb-format-check { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
 #book-agent-blue .bb-format-output { white-space: pre-wrap; overflow-wrap: anywhere; font: 16px/1.9 "Noto Serif SC", "Songti SC", SimSun, serif; margin: 24px 0; }
+#book-agent-blue .bb-epub-meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 11px; color: var(--muted); margin: 8px 0; }
+#book-agent-blue .bb-epub-warnings { margin: 8px 0; padding-left: 18px; font-size: 12px; }
+#book-agent-blue .bb-epub-warnings li { margin: 3px 0; padding: 4px 8px; border-radius: 5px; list-style: none; }
+#book-agent-blue .bb-epub-toc { max-height: 180px; overflow: auto; margin: 8px 0 12px; padding: 8px 12px 8px 28px; border: 1px solid var(--line); border-radius: 6px; background: var(--soft); font-size: 12px; }
+#book-agent-blue .bb-epub-toc li { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+#book-agent-blue .bb-epub-toc small { color: var(--muted); white-space: nowrap; }
+#book-agent-blue .bb-epub-preview { width: 100%; height: min(62vh, 640px); border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 #book-agent-blue .bb-format-stale { padding: 12px; border-radius: 6px; background: var(--amber-tint); color: var(--amber); }
 #book-agent-blue .bb-format-proposal { border: 1px solid var(--line); border-radius: 6px; padding: 12px; overflow-wrap: anywhere; }
 #book-agent-blue .bb-format-proposal dl { font-size: 12px; }

@@ -127,6 +127,7 @@ export function WorkspaceApp({
     sourceVersion,
     dirty,
     enabled: mode === "排版",
+    metadata: info.metadata,
     onMessage: setMessage,
   });
   const proofread = useProofreadWorkspace({
@@ -456,9 +457,13 @@ export function WorkspaceApp({
   const blocks = useMemo(
     () =>
       chapter
-        ? deriveBlocks(info.format, draft, info.importSettings.paragraphMode)
+        ? deriveBlocks(
+            info.bodyFormat,
+            draft,
+            info.importSettings.paragraphMode,
+          )
         : [],
-    [chapter, draft, info.format, info.importSettings.paragraphMode],
+    [chapter, draft, info.bodyFormat, info.importSettings.paragraphMode],
   );
   const paragraph = useMemo(
     () => chapterOffsetToParagraphOffset(blocks, cursor),
@@ -593,8 +598,12 @@ export function WorkspaceApp({
             <div className="bb-book">
               <strong>{info.bookTitle}</strong>
               <span className="bb-sub">
-                {info.format === "markdown" ? "Markdown" : "TXT"} ·{" "}
-                {info.chapters.length} 章
+                {info.format === "epub"
+                  ? "EPUB · Markdown 正文"
+                  : info.bodyFormat === "markdown"
+                    ? "Markdown"
+                    : "TXT"}{" "}
+                · {info.chapters.length} 章
               </span>
             </div>
             <div className="bb-sectionlabel">
@@ -662,8 +671,11 @@ export function WorkspaceApp({
             <div className="bb-source" title={info.root}>
               来源：{info.source.fileName}
               <br />
-              编码：{info.source.encoding.toUpperCase()} ·{" "}
-              {info.source.eol === "crlf" ? "原 CRLF" : "LF"}
+              {info.format === "epub"
+                ? `EPUB ${info.importInfo?.version ?? ""} · 原始文件已完整保留 · 语言 ${info.metadata.language}`
+                : `编码：${(info.source.encoding ?? "utf-8").toUpperCase()} · ${
+                    info.source.eol === "crlf" ? "原 CRLF" : "LF"
+                  }`}
             </div>
           </aside>
 
@@ -823,6 +835,7 @@ export function WorkspaceApp({
             <PipelinePanel
               workspaceId={info.workspaceId}
               chapterIds={formatIds}
+              metadata={info.metadata}
               dirty={dirty}
               onMessage={setMessage}
               onUpdated={proofread.refresh}

@@ -1,8 +1,9 @@
-import type { ChapterFile, BookFormat } from "../../shared/book";
+import type { ChapterFile, BodyFormat } from "../../shared/book";
 import { formatOptionsSchema, type FormatOptions } from "../../shared/format-options";
 import { formatTxtBody } from "./txt-formatter";
 import { formatMarkdownBody } from "./markdown-formatter";
-export function formatBook(chapters:readonly ChapterFile[],sourceFormat:BookFormat,outputFormat:BookFormat,options:FormatOptions):string {
+/** 文本导出：正文表示决定如何派生段落；EPUB 导出走独立构建器，不经本函数。 */
+export function formatBook(chapters:readonly ChapterFile[],sourceFormat:BodyFormat,outputFormat:BodyFormat,options:FormatOptions):string {
  const o=formatOptionsSchema.parse(options);
  if(outputFormat==='markdown' && o.indent==='custom' && /^[ \t]/.test(o.customPrefix)) throw new Error('Markdown 自定义缩进请使用全角空格，半角缩进会改变代码块语义');
  const parts=chapters.map(c=>{

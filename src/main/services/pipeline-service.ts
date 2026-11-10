@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { BrowserWindow } from "electron";
 import { writeFileAtomic } from "../../core/workspace/atomic-file";
+import { bookMetadataOf } from "../../shared/book";
 import {
   readChapterFile,
   type Workspace,
@@ -84,6 +85,17 @@ export class PipelineService {
   private file(w: Workspace, id: string) {
     return path.join(w.root, "tasks", `pipeline-${id}.json`);
   }
+  /** 终态记录不再占用 active；避免在收尾微任务前误报“已有组合任务运行”。 */
+  private releaseFinishedActive(): void {
+    const active = this.active;
+    if (
+      active &&
+      ["completed", "failed", "cancelled", "interrupted"].includes(
+        active.record.state,
+      )
+    )
+      this.active = null;
+  }
   private async save(w: Workspace, r: PipelineRecord) {
     this.records.set(r.pipelineId, r);
     r.updatedAt = new Date().toISOString();
@@ -105,6 +117,7 @@ export class PipelineService {
     return sorted;
   }
   async start(raw: PipelineStartRequest) {
+    this.releaseFinishedActive();
     if (this.active || this.preparing)
       throw new PipelineError("TASK_BUSY", "已有组合任务运行");
     this.preparing = true;
@@ -112,6 +125,9 @@ export class PipelineService {
       const request = pipelineStartSchema.parse(raw);
       const w = this.current();
       request.chapterIds = this.ordered(w, request.chapterIds);
+      // EPUB 元数据在启动时冻结为快照；恢复时沿用，不重新读取可能已变化的设置。
+      if (request.format?.outputFormat === "epub" && !request.format.metadata)
+        request.format.metadata = bookMetadataOf(w.book);
       const kinds: PipelineStage[] = [];
       if (request.proofread) kinds.push("proofread", "review");
       if (request.title) kinds.push("title");
@@ -187,6 +203,7 @@ export class PipelineService {
   }
   private async resumePrepared(raw: unknown) {
     const req = pipelineResumeSchema.parse(raw);
+    this.releaseFinishedActive();
     if (this.active) throw new PipelineError("TASK_BUSY", "已有组合任务运行");
     const w = this.current();
     const r = (await this.list()).find((x) => x.pipelineId === req.pipelineId);
@@ -239,6 +256,7 @@ export class PipelineService {
     return null;
   }
   async stop() {
+    this.releaseFinishedActive();
     if (this.active)
       await this.cancel({ pipelineId: this.active.record.pipelineId });
   }

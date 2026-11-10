@@ -1,7 +1,12 @@
 import type {
   BookFormat,
+  BookMetadata,
   ChapterKind,
+  ConversionNotice,
+  EpubTocSource,
+  EpubVersion,
   ParagraphMode,
+  SourceFormat,
   SplitMode,
 } from "../../shared/book";
 import { countCodePoints } from "../../shared/book";
@@ -18,7 +23,7 @@ import { segmentBody, type ParsedSegment } from "./segments";
 
 export interface ImportSource {
   fileName: string;
-  format: BookFormat;
+  format: SourceFormat;
   bytes: Uint8Array;
 }
 
@@ -29,6 +34,11 @@ export interface ImportOptions {
   paragraphMode: ParagraphMode;
   /** Markdown 标题层级；0 = 自动。TXT 忽略。 */
   headingLevel: number;
+}
+
+/** EPUB 没有整文件编码或文本分章参数；分章来自书籍结构，选项只保留来源标记。 */
+export interface EpubImportOptions {
+  source: "epub";
 }
 
 export interface ImportSegmentPreview {
@@ -49,22 +59,40 @@ export interface ImportGroupPreview {
   bodyHash: string;
 }
 
-export interface ImportPreview {
+interface ImportPreviewBase {
   fileName: string;
-  format: BookFormat;
+  /** 来源格式；正文表示另由工作区 bodyFormat 记录。 */
+  format: SourceFormat;
   byteLength: number;
   sourceSha256: string;
+  totalChars: number;
+  segments: ImportSegmentPreview[];
+  groups: ImportGroupPreview[];
+}
+
+export interface TextImportPreview extends ImportPreviewBase {
+  kind: "text";
   encoding: SupportedEncoding;
   candidates: EncodingCandidate[];
   requiresChoice: boolean;
   replacements: number;
   eol: "lf" | "crlf";
-  totalChars: number;
   headingLevel: number;
   options: ImportOptions;
-  segments: ImportSegmentPreview[];
-  groups: ImportGroupPreview[];
 }
+
+/** EPUB 预览：不含整文件文本编码，明确展示元数据、导航来源与转换提示。 */
+export interface EpubImportPreview extends ImportPreviewBase {
+  kind: "epub";
+  metadata: BookMetadata;
+  version: EpubVersion;
+  tocSource: EpubTocSource;
+  spineCount: number;
+  notices: ConversionNotice[];
+  options: EpubImportOptions;
+}
+
+export type ImportPreview = TextImportPreview | EpubImportPreview;
 
 export interface ImportChapter {
   title: string;
@@ -98,6 +126,11 @@ function parseSegments(
   text: string,
   options: ImportOptions,
 ): { lines: string[]; segments: ParsedSegment[]; headingLevel: number } {
+  if (source.format === "epub")
+    throw new ImportError(
+      "UNSUPPORTED_FORMAT",
+      "EPUB 来源必须使用 EPUB 解析与分章流程",
+    );
   if (source.format === "txt") {
     const parsed = parseTxtChapters(text, options.splitMode);
     return { ...parsed, headingLevel: 0 };
@@ -117,7 +150,12 @@ export function buildImportPreview(
   source: ImportSource,
   options: ImportOptions,
   boundaries?: readonly number[],
-): ImportPreview {
+): TextImportPreview {
+  if (source.format === "epub")
+    throw new ImportError(
+      "UNSUPPORTED_FORMAT",
+      "EPUB 来源必须使用 EPUB 解析与分章流程",
+    );
   let decoded: {
     encoding: SupportedEncoding;
     text: string;
@@ -166,6 +204,7 @@ export function buildImportPreview(
   }));
 
   return {
+    kind: "text",
     fileName: source.fileName,
     format: source.format,
     byteLength: source.bytes.byteLength,
@@ -185,7 +224,7 @@ export function buildImportPreview(
 
 export interface AssembleResult {
   chapters: ImportChapter[];
-  preview: ImportPreview;
+  preview: TextImportPreview;
 }
 
 function validateBoundaries(boundaries: readonly number[], segmentCount: number): void {
