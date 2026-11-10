@@ -57,7 +57,10 @@ const server = createServer((req, res) => {
         args = {
           chapterId: p.chapterId,
           inputHash: p.inputHash,
-          titles: ["雨夜归家", "旧信线索", "空屋来信"],
+          titles: ["雨夜归家", "旧信线索", "空屋来信"].slice(
+            0,
+            p.options.candidateCount,
+          ),
         };
       } else {
         name = "submit_summary";
@@ -114,7 +117,8 @@ async function launch(fixture, tag) {
   delete env.ELECTRON_RUN_AS_NODE;
   if (process.env.BW_PACKAGED_EXE) {
     // Run the copied application without access to the development Node/npm PATH.
-    for (const key of Object.keys(env)) if (key.toLowerCase() === "path") delete env[key];
+    for (const key of Object.keys(env))
+      if (key.toLowerCase() === "path") delete env[key];
     env.PATH = `${process.env.SystemRoot}\\System32;${process.env.SystemRoot}`;
     delete env.NODE_PATH;
     delete env.NODE_OPTIONS;
@@ -157,8 +161,11 @@ try {
     let page = await launch(source, format);
     await page.getByRole("button", { name: "导入书籍", exact: true }).click();
     await page.getByRole("button", { name: "创建作品", exact: true }).click();
-    await page.waitForSelector(".bb-book-name").catch(async error=>{
-      console.error("Import errors:",await page.locator(".bb-error").allTextContents());
+    await page.waitForSelector(".bb-book-name").catch(async (error) => {
+      console.error(
+        "Import errors:",
+        await page.locator(".bb-error").allTextContents(),
+      );
       throw error;
     });
     const w = await page.evaluate(() => window.desktop.workspace.state());
@@ -475,7 +482,12 @@ try {
       const processExited = new Promise((resolve) =>
         app.process().once("exit", resolve),
       );
-      if (process.platform === "win32") execFileSync("taskkill",["/pid",String(app.process().pid),"/T","/F"],{stdio:"ignore"});
+      if (process.platform === "win32")
+        execFileSync(
+          "taskkill",
+          ["/pid", String(app.process().pid), "/T", "/F"],
+          { stdio: "ignore" },
+        );
       else app.process().kill("SIGKILL");
       await processExited;
       app = null;
@@ -565,7 +577,9 @@ try {
   server.close();
   await mkdir("artifacts", { recursive: true });
   await writeFile(
-    process.env.BW_PACKAGED_EXE ? "artifacts/electron-p5-packaged-test.json" : "artifacts/electron-p5-test.json",
+    process.env.BW_PACKAGED_EXE
+      ? "artifacts/electron-p5-packaged-test.json"
+      : "artifacts/electron-p5-test.json",
     JSON.stringify({ ...evidence, requests }, null, 2),
   );
 }

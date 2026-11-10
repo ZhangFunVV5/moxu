@@ -1,6 +1,7 @@
 import { GenerateService } from "../services/generate-service";
 import { GenerateError } from "../../shared/generate";
 import {
+  generateBatchRequestSchema,
   generateStartRequestSchema,
   generateChapterRequestSchema,
   generateTaskRequestSchema,
@@ -119,6 +120,12 @@ export function registerWorkspaceIpc(
   );
   handle("generate:chapter", generateChapterRequestSchema, (v) =>
     generateService.chapter(v),
+  );
+  handle("generate:task-result", generateTaskRequestSchema, (v) =>
+    generateService.taskResult(v.taskId),
+  );
+  handle("generate:apply-batch", generateBatchRequestSchema, (v) =>
+    generateService.applyBatch(v),
   );
   handle("generate:summary", null, () => generateService.summary());
   handle("generate:select-title", generateSelectTitleRequestSchema, (v) =>

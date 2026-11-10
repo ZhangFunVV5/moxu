@@ -20,6 +20,7 @@ const labels: Record<string, string> = {
   export: "导出",
   queued: "排队中",
   running: "运行中",
+  "waiting-title": "等待标题确认",
   "waiting-review": "等待审阅",
   completed: "已完成",
   failed: "失败",
@@ -306,6 +307,7 @@ export function PipelinePanel({
                 </label>
               )}
               {[
+                "waiting-title",
                 "waiting-review",
                 "failed",
                 "interrupted",
@@ -323,9 +325,11 @@ export function PipelinePanel({
                     )
                   }
                 >
-                  {r.state === "waiting-review"
-                    ? "审阅完成，继续流程"
-                    : "恢复未完成阶段"}
+                  {r.state === "waiting-title"
+                    ? "标题决议后继续流程"
+                    : r.state === "waiting-review"
+                      ? "审阅完成，继续流程"
+                      : "恢复未完成阶段"}
                 </button>
               )}
               {["running", "queued"].includes(r.state) && (

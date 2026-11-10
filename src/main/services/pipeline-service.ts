@@ -306,6 +306,26 @@ export class PipelineService {
           await this.save(w, r);
           return;
         }
+        if (
+          stage.kind === "title" &&
+          stage.taskId &&
+          r.request.chapterIds.length > 1
+        ) {
+          const result = await this.generate.taskResult(stage.taskId);
+          if (["completed", "failed"].includes(result.state)) {
+            if (result.decision === "pending") {
+              stage.state = "waiting-title";
+              r.state = "waiting-title";
+              await this.save(w, r);
+              return;
+            }
+            if (result.state === "completed") {
+              stage.state = "completed";
+              await this.save(w, r);
+              continue;
+            }
+          }
+        }
         stage.state = "running";
         await this.save(w, r);
         if (
@@ -427,6 +447,20 @@ export class PipelineService {
           if (out.cancelled)
             throw new PipelineError("CANCELLED", "已取消导出，已有结果保留");
           r.outputPath = out.path;
+        }
+        if (
+          stage.kind === "title" &&
+          stage.taskId &&
+          r.request.chapterIds.length > 1 &&
+          !cancelled()
+        ) {
+          const result = await this.generate.taskResult(stage.taskId);
+          if (result.decision === "pending") {
+            stage.state = "waiting-title";
+            r.state = "waiting-title";
+            await this.save(w, r);
+            return;
+          }
         }
         if (cancelled())
           throw new PipelineError("CANCELLED", "任务已取消，已提交结果保留");

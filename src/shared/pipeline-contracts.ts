@@ -44,10 +44,16 @@ export const pipelineProposeSchema = z
   })
   .strict();
 export type PipelineStage =
-  "proofread" | "review" | "title" | "summary" | "format" | "export";
+  | "proofread"
+  | "review"
+  | "title"
+  | "summary"
+  | "format"
+  | "export";
 export type PipelineState =
   | "queued"
   | "running"
+  | "waiting-title"
   | "waiting-review"
   | "completed"
   | "failed"
@@ -100,6 +106,7 @@ export const pipelineRecordSchema = z
     state: z.enum([
       "queued",
       "running",
+      "waiting-title",
       "waiting-review",
       "completed",
       "failed",
@@ -120,6 +127,7 @@ export const pipelineRecordSchema = z
           state: z.enum([
             "queued",
             "running",
+            "waiting-title",
             "waiting-review",
             "completed",
             "failed",
@@ -154,4 +162,3 @@ export const pipelineRecordSchema = z
     if (expected.join(",") !== r.stages.map((s) => s.kind).join(","))
       ctx.addIssue({ code: "custom", message: "组合阶段顺序无效" });
   });
-

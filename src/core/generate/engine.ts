@@ -34,6 +34,12 @@ export async function runGenerateTask(input: {
       continue;
     }
     await taskStore.setState(chapterId, "running");
+    input.emit?.({
+      type: "chapterUpdated",
+      chapterId,
+      state: "running",
+      message: "正在生成章节",
+    });
     try {
       const chapter = await readChapterFile(
         workspace.root,

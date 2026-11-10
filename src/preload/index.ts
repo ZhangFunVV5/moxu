@@ -2,11 +2,13 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopApi, TaskEvent } from "../shared/contracts";
 const api: DesktopApi = {
   lifecycle: {
-    confirmClose: (request) => ipcRenderer.invoke("lifecycle:confirm-close", request),
+    confirmClose: (request) =>
+      ipcRenderer.invoke("lifecycle:confirm-close", request),
     onCloseRequested(callback) {
       const listener = () => callback();
       ipcRenderer.on("lifecycle:close-requested", listener);
-      return () => ipcRenderer.removeListener("lifecycle:close-requested", listener);
+      return () =>
+        ipcRenderer.removeListener("lifecycle:close-requested", listener);
     },
   },
   pipeline: {
@@ -66,6 +68,8 @@ const api: DesktopApi = {
     },
   },
   generate: {
+    taskResult: (r) => ipcRenderer.invoke("generate:task-result", r),
+    applyBatch: (r) => ipcRenderer.invoke("generate:apply-batch", r),
     start: (r) => ipcRenderer.invoke("generate:start", r),
     resume: (r) => ipcRenderer.invoke("generate:resume", r),
     cancel: (r) => ipcRenderer.invoke("generate:cancel", r),

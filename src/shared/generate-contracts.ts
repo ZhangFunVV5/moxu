@@ -77,6 +77,9 @@ export interface GenerateSummaryDto {
   tasks: Array<{
     taskId: string;
     kind: "title" | "summary";
+    createdAt?: string;
+    activityAt?: string;
+    batchConfirmation?: boolean;
     state: TaskState;
     chapterIds: string[];
   }>;
@@ -98,7 +101,52 @@ export interface DesktopGenerateApi {
   exportSummaries(request: {
     chapterIds: string[];
   }): Promise<Result<GenerateExportResult>>;
+  taskResult(request: { taskId: string }): Promise<Result<GenerateTaskResult>>;
+  applyBatch(
+    request: GenerateBatchRequest,
+  ): Promise<Result<GenerateBatchResult>>;
   recover(): Promise<Result<{ interrupted: string[] }>>;
   onEvent(listener: (event: GenerateEventDto) => void): () => void;
 }
 
+export const generateBatchRequestSchema = z
+  .object({
+    workspaceId: z.string().uuid(),
+    taskId: z.string().uuid(),
+    action: z.enum(["confirm", "cancel"]),
+    selections: z.array(generateSelectTitleRequestSchema).max(2000),
+  })
+  .strict();
+export type GenerateBatchRequest = z.infer<typeof generateBatchRequestSchema>;
+export interface GenerateTaskResult {
+  workspaceId: string;
+  taskId: string;
+  state: TaskState;
+  decision: "pending" | "confirmed" | "cancelled";
+  total: number;
+  succeeded: number;
+  failed: number;
+  pending: number;
+  currentChapterId?: string;
+  rows: Array<{
+    chapterId: string;
+    order: number;
+    state: TaskState;
+    currentTitle: string;
+    bodyHash: string;
+    titleRevision: number;
+    artifactId?: string;
+    title?: string;
+    error?: string;
+    stale: boolean;
+  }>;
+}
+export interface GenerateBatchResult {
+  results: Array<{
+    chapterId: string;
+    applied: boolean;
+    error?: string;
+    view?: ChapterGenerateView;
+  }>;
+  resolved: boolean;
+}

@@ -64,9 +64,10 @@ const server = createServer((request, response) => {
       ? {
           chapterId: prompt.chapterId,
           inputHash: prompt.inputHash,
-          titles: generation
+          titles: (generation
             ? ["夜归旧宅", "信中往事", "钥匙之谜"]
-            : ["雨夜来信", "空屋旧事", "门后的信"],
+            : ["雨夜来信", "空屋旧事", "门后的信"]
+          ).slice(0, prompt.options.candidateCount),
         }
       : { chapterId: prompt.chapterId, inputHash: prompt.inputHash, summary };
     sse(
@@ -183,12 +184,84 @@ try {
   );
   await page.getByLabel("任务范围").selectOption("all");
   await page.getByTestId("generate-title").click();
+  await page.locator(".bb-batch-dialog[open]").waitFor();
+  await idle(page);
+  assert.equal(await page.locator(".bb-batch-row input:checked").count(), 2);
+  await page.screenshot({
+    path: "artifacts/title-batch-desktop.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 375, height: 520 });
+  const bounds = await page
+    .locator(".bb-batch-dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .boundingBox();
+  assert.ok(bounds && bounds.y + bounds.height <= 520);
+  await page.screenshot({
+    path: "artifacts/title-batch-narrow.png",
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator(".bb-batch-row input").nth(1).uncheck();
+  await page
+    .locator(".bb-batch-dialog")
+    .getByRole("button", { name: "确认", exact: true })
+    .click();
+  await until(
+    async () =>
+      !(await page.locator(".bb-batch-dialog").evaluate((d) => d.open)),
+  );
+  assert.equal((await view(page, ids[1])).data.currentTitle, "第二章 旧信");
+  evidence.batchPartialApply = true;
+  await page.getByRole("button", { name: "保留原标题", exact: true }).click();
+  const batchTitles = await Promise.all(ids.map((id) => view(page, id)));
+  for (const action of ["escape", "none", "reopen"]) {
+    await page.getByTestId("generate-title").click();
+    await page.locator(".bb-batch-dialog[open]").waitFor();
+    if (action === "escape") await page.keyboard.press("Escape");
+    else if (action === "none") {
+      for (const box of await page.locator(".bb-batch-row input").all())
+        await box.uncheck();
+      await page
+        .locator(".bb-batch-dialog")
+        .getByRole("button", { name: "确认", exact: true })
+        .click();
+    } else {
+      const beforeRequests = requests;
+      await app.close();
+      app = null;
+      page = await launch();
+      await page.locator(".bb-batch-dialog[open]").waitFor();
+      assert.equal(requests, beforeRequests);
+      await page
+        .locator(".bb-batch-dialog")
+        .getByRole("button", { name: "取消", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "标题与摘要", exact: true })
+        .click();
+      await page.getByLabel("任务范围").selectOption("all");
+    }
+    await until(
+      async () =>
+        !(await page.locator(".bb-batch-dialog").evaluate((d) => d.open)),
+    );
+    for (let i = 0; i < ids.length; i++) {
+      const unchanged = (await view(page, ids[i])).data;
+      assert.equal(unchanged.currentTitle, batchTitles[i].data.currentTitle);
+      assert.equal(unchanged.titleRevision, batchTitles[i].data.titleRevision);
+      assert.equal(unchanged.bodyHash, batchTitles[i].data.bodyHash);
+    }
+  }
+  evidence.batchCancelEscapeNoneAndReopen = true;
+  await page.getByLabel("任务范围").selectOption("current");
+  await page.getByTestId("generate-title").click();
   await page.getByTestId("title-candidate-2").waitFor();
   await idle(page);
   assert.equal(
     (await view(page, ids[1])).data.artifacts.filter((a) => a.kind === "title")
       .length,
-    1,
+    4,
   );
   evidence.multiChapterScope = true;
   assert.equal(
@@ -239,6 +312,7 @@ try {
   );
   await idle(page);
   evidence.latestRegeneratedVisible = true;
+  await page.getByLabel("任务范围").selectOption("all");
   await page.getByTestId("generate-summary").click();
   await page.getByTestId("generated-summary").waitFor();
   await idle(page);
@@ -329,7 +403,7 @@ try {
   await until(async () => {
     const r = await view(page, ids[0]);
     return (
-      r.ok && r.data.artifacts.filter((a) => a.kind === "title").length === 3
+      r.ok && r.data.artifacts.filter((a) => a.kind === "title").length === 7
     );
   });
   const savedDraft = await page.evaluate(

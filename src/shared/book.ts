@@ -71,6 +71,17 @@ export const chapterFileSchema = z
     blocks: z.array(blockSchema),
     bodyRevision: z.number().int().positive(),
     bodyHash: z.string().regex(/^[0-9a-f]{64}$/),
+    titleApplication: z
+      .object({
+        taskId: z.string().uuid(),
+        artifactId: z.string().uuid(),
+        candidateIndex: z.number().int().nonnegative(),
+        title: z.string(),
+        titleRevision: z.number().int().positive(),
+        bodyHash: z.string(),
+      })
+      .strict()
+      .optional(),
     titleRevision: z.number().int().positive(),
     /**
      * P3 审阅状态：正文、已采纳集合、决议和操作记录与本章同一次原子提交。
@@ -132,7 +143,12 @@ export interface ChapterSummary {
   titleRevision: number;
   /** 精校待审数量；P1 尚无审阅数据，恒为 0，不伪造。 */
   pendingReview: number;
-  taskState: "unchecked" | "running" | "waiting-review" | "completed" | "failed";
+  taskState:
+    | "unchecked"
+    | "running"
+    | "waiting-review"
+    | "completed"
+    | "failed";
 }
 
 export interface ChapterDetail extends ChapterSummary {
@@ -183,5 +199,9 @@ export function toChapterDetail(
   chapter: ChapterFile,
   pendingReview = 0,
 ): ChapterDetail {
-  return { ...toChapterSummary(chapter, pendingReview), body: chapter.body, blocks: chapter.blocks };
+  return {
+    ...toChapterSummary(chapter, pendingReview),
+    body: chapter.body,
+    blocks: chapter.blocks,
+  };
 }

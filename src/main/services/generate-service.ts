@@ -4,8 +4,16 @@ import { dialog, type BrowserWindow } from "electron";
 import type { Adapter } from "../../agent/model/model-adapter";
 import { TaskStore } from "../../agent/tasks/task-store";
 import { loadTaskSpec } from "../../agent/tasks/task-types";
-import { GENERATE_PROFILE_VERSION, GenerateError } from "../../shared/generate";
 import {
+  generateArtifactSchema,
+  GENERATE_PROFILE_VERSION,
+  GenerateError,
+} from "../../shared/generate";
+import {
+  generateBatchRequestSchema,
+  type GenerateBatchRequest,
+  type GenerateTaskResult,
+  type GenerateBatchResult,
   generateStartRequestSchema,
   generateSelectTitleRequestSchema,
   type GenerateStartRequest,
@@ -21,7 +29,7 @@ import {
   writeChapterFile,
   type Workspace,
 } from "../../core/workspace/book-store";
-import { writeFileAtomic } from "../../core/workspace/atomic-file";
+import { WriteQueue, writeFileAtomic } from "../../core/workspace/atomic-file";
 import {
   canonicalExportPath,
   isProtectedWorkspacePath,
@@ -35,6 +43,7 @@ import type { TaskService } from "./task-service";
 export class GenerateService {
   private active: { taskId: string; controller: AbortController } | null = null;
   private preparing = false;
+  private batchQueue = new WriteQueue();
   private listeners = new Set<(event: GenerateEventDto) => void>();
   constructor(
     private workspace: WorkspaceService,
@@ -73,12 +82,21 @@ export class GenerateService {
     try {
       const request = generateStartRequestSchema.parse(raw);
       const workspace = this.current();
+      const ordered = workspace.book.chapterOrder.filter((id) =>
+        request.chapterIds.includes(id),
+      );
+      if (request.chapterIds.some((id) => !ordered.includes(id)))
+        throw new GenerateError("FORBIDDEN_RANGE", "章节范围无效");
+      request.chapterIds = ordered;
+      if (request.kind === "title")
+        request.options.candidateCount = ordered.length === 1 ? 3 : 1;
       const adapter = await this.adapterProvider();
       const modelConfigId = await this.modelIdProvider?.();
-      const sourceTitles: Record<string, string> = {};
+      const sourceTitles: Record<string, string | number> = {};
       for (const id of request.chapterIds) {
         const c = await readChapterFile(workspace.root, workspace.book, id);
         sourceTitles[`sourceTitle:${id}`] = c.title.source;
+        sourceTitles[`titleRevision:${id}`] = c.titleRevision;
       }
       this.assertCurrent(workspace);
       const { spec } = await this.taskService.createSpec({
@@ -86,6 +104,8 @@ export class GenerateService {
         chapterIds: request.chapterIds,
         options: {
           generateOptions: JSON.stringify(request.options),
+          batchConfirmation:
+            request.kind === "title" && request.chapterIds.length > 1,
           ...sourceTitles,
         },
         profileVersion: GENERATE_PROFILE_VERSION,
@@ -175,6 +195,14 @@ export class GenerateService {
       }
       const store = await TaskStore.open(workspace.root, taskId);
       await store.recover();
+      if (
+        spec.type === "generate_title" &&
+        spec.chapterIds.length > 1 &&
+        Object.values(store.snapshot.chapters).some(
+          (c) => c.status !== "completed",
+        )
+      )
+        await fs.rm(this.decisionFile(workspace, taskId), { force: true });
       const adapter = await this.adapterProvider();
       this.assertCurrent(workspace);
       this.launch(workspace, spec, store, adapter);
@@ -222,15 +250,40 @@ export class GenerateService {
         selection?.title === c.title.current ? selection.title : undefined,
     };
   }
-  async selectTitle(raw: GenerateSelectTitleRequest) {
+  async selectTitle(raw: GenerateSelectTitleRequest, batchTaskId?: string) {
     const r = generateSelectTitleRequestSchema.parse(raw);
     const w = this.current();
     const artifact = (await listArtifacts(w.root, r.chapterId)).find(
       (a) => a.artifactId === r.artifactId && a.kind === "title",
     );
     if (!artifact) throw new GenerateError("ARTIFACT_MISSING", "候选不存在");
+    const batchSpec = batchTaskId
+      ? await loadTaskSpec(w.root, batchTaskId)
+      : undefined;
     await withChapterWriteLock(w.root, r.chapterId, async () => {
       const c = await readChapterFile(w.root, w.book, r.chapterId);
+      this.assertCurrent(w);
+      if (
+        batchTaskId &&
+        c.titleApplication?.taskId === batchTaskId &&
+        c.titleApplication.artifactId === r.artifactId &&
+        c.titleApplication.candidateIndex === r.candidateIndex &&
+        c.titleApplication.title === c.title.current &&
+        c.titleApplication.titleRevision === c.titleRevision &&
+        c.titleApplication.bodyHash === c.bodyHash
+      )
+        return;
+      if (
+        batchTaskId &&
+        (artifact.taskId !== batchTaskId ||
+          artifact.workspaceId !== w.book.workspaceId)
+      )
+        throw new GenerateError("ARTIFACT_MISSING", "候选身份不符");
+      if (
+        batchSpec?.options[`titleRevision:${r.chapterId}`] !== undefined &&
+        batchSpec.options[`titleRevision:${r.chapterId}`] !== c.titleRevision
+      )
+        throw new GenerateError("SOURCE_CHANGED", "生成后标题已变化");
       if (
         c.bodyHash !== r.expectedBodyHash ||
         c.titleRevision !== r.expectedTitleRevision
@@ -261,17 +314,174 @@ export class GenerateService {
       const next = {
         ...c,
         title: { ...c.title, current: complete },
+        titleApplication: batchTaskId
+          ? {
+              taskId: batchTaskId,
+              artifactId: r.artifactId,
+              candidateIndex: r.candidateIndex,
+              title: complete,
+              titleRevision:
+                c.titleRevision + (complete === c.title.current ? 0 : 1),
+              bodyHash: c.bodyHash,
+            }
+          : undefined,
         titleRevision: c.titleRevision + (complete === c.title.current ? 0 : 1),
         updatedAt: new Date().toISOString(),
       };
       await writeChapterFile(w.root, next);
-      await writeFileAtomic(
-        path.join(w.root, "generated", `selection-${r.chapterId}.json`),
-        JSON.stringify({ artifactId: r.artifactId, title: complete }),
-      );
       this.workspace.updateChapterCache(next);
+      try {
+        await writeFileAtomic(
+          path.join(w.root, "generated", `selection-${r.chapterId}.json`),
+          JSON.stringify({ artifactId: r.artifactId, title: complete }),
+        );
+      } catch (error) {
+        if (!batchTaskId) throw error;
+      }
     });
     return this.chapter({ chapterId: r.chapterId });
+  }
+  private decisionFile(w: Workspace, taskId: string) {
+    return path.join(w.root, "tasks", taskId, "title-decision.json");
+  }
+  async taskResult(taskId: string): Promise<GenerateTaskResult> {
+    const w = this.current();
+    const spec = await loadTaskSpec(w.root, taskId);
+    if (
+      spec.workspaceId !== w.book.workspaceId ||
+      spec.type !== "generate_title" ||
+      spec.chapterIds.length < 2
+    )
+      throw new GenerateError("TASK_NOT_FOUND", "不是本作品的批量标题任务");
+    const store = await TaskStore.open(w.root, taskId);
+    const rows: GenerateTaskResult["rows"] = [];
+    for (const id of w.book.chapterOrder.filter((id) =>
+      spec.chapterIds.includes(id),
+    )) {
+      const c = await readChapterFile(w.root, w.book, id);
+      const cp = store.getCheckpoint(id);
+      const raw = await store.readArtifact(id);
+      const parsed = generateArtifactSchema.safeParse(raw?.payload);
+      const a = parsed.success ? parsed.data : undefined;
+      const valid =
+        a?.workspaceId === spec.workspaceId &&
+        a.taskId === taskId &&
+        a.chapterId === id &&
+        a.kind === "title" &&
+        a.inputFingerprint === spec.inputFingerprint;
+      rows.push({
+        chapterId: id,
+        order: w.book.chapterOrder.indexOf(id) + 1,
+        state: cp.status,
+        currentTitle: c.title.current,
+        bodyHash: c.bodyHash,
+        titleRevision: c.titleRevision,
+        artifactId: valid ? a.artifactId : undefined,
+        title: valid ? a.titles?.[0] : undefined,
+        stale:
+          !valid ||
+          a.sourceBodyHash !== c.bodyHash ||
+          a.sourceTitle !== c.title.source ||
+          (spec.options[`titleRevision:${id}`] !== undefined &&
+            spec.options[`titleRevision:${id}`] !== c.titleRevision &&
+            !(
+              c.titleApplication?.taskId === taskId &&
+              c.titleApplication.title === c.title.current &&
+              c.titleApplication.titleRevision === c.titleRevision &&
+              c.titleApplication.bodyHash === c.bodyHash
+            )),
+        error: cp.errorCode,
+      });
+    }
+    const succeeded = rows.filter((r) => r.state === "completed").length;
+    const failed = rows.filter((r) => r.state === "failed").length;
+    const state = rows.some((r) => r.state === "running")
+      ? "running"
+      : rows.some((r) => r.state === "cancelled")
+        ? "cancelled"
+        : rows.some((r) => r.state === "interrupted")
+          ? "interrupted"
+          : rows.some((r) => r.state === "queued")
+            ? "queued"
+            : failed
+              ? "failed"
+              : "completed";
+    const decision = await fs
+      .readFile(this.decisionFile(w, taskId), "utf8")
+      .then((s) =>
+        ["confirmed", "cancelled"].includes(JSON.parse(s).decision)
+          ? (JSON.parse(s).decision as "confirmed" | "cancelled")
+          : ("pending" as const),
+      )
+      .catch(() => "pending" as const);
+    this.assertCurrent(w);
+    return {
+      workspaceId: spec.workspaceId,
+      taskId,
+      rows,
+      state,
+      decision,
+      total: rows.length,
+      succeeded,
+      failed,
+      pending: rows.length - succeeded - failed,
+      currentChapterId: rows.find((r) => r.state === "running")?.chapterId,
+    };
+  }
+  async applyBatch(raw: GenerateBatchRequest): Promise<GenerateBatchResult> {
+    const r = generateBatchRequestSchema.parse(raw);
+    const w = this.current();
+    if (r.workspaceId !== w.book.workspaceId)
+      throw new GenerateError("SOURCE_CHANGED", "作品已切换");
+    return this.batchQueue.run(this.decisionFile(w, r.taskId), async () => {
+      this.assertCurrent(w);
+      const task = await this.taskResult(r.taskId);
+      if (!["completed", "failed"].includes(task.state))
+        throw new GenerateError("TASK_BUSY", "任务尚未结束");
+      if (task.decision !== "pending") return { results: [], resolved: true };
+      if (
+        new Set(r.selections.map((s) => s.chapterId)).size !==
+          r.selections.length ||
+        (r.action === "cancel" && r.selections.length)
+      )
+        throw new GenerateError("INVALID_TITLE", "批量选择无效");
+      for (const selection of r.selections) {
+        const row = task.rows.find(
+          (row) => row.chapterId === selection.chapterId,
+        );
+        if (
+          !row ||
+          row.artifactId !== selection.artifactId ||
+          row.state !== "completed" ||
+          selection.candidateIndex !== 0 ||
+          selection.editedTitle !== undefined
+        )
+          throw new GenerateError("ARTIFACT_MISSING", "候选不属于本任务");
+      }
+      const results: GenerateBatchResult["results"] = [];
+      for (const selection of r.selections) {
+        try {
+          this.assertCurrent(w);
+          const view = await this.selectTitle(selection, r.taskId);
+          results.push({ chapterId: selection.chapterId, applied: true, view });
+        } catch (error) {
+          results.push({
+            chapterId: selection.chapterId,
+            applied: false,
+            error: error instanceof Error ? error.message : "写入失败",
+          });
+        }
+      }
+      const resolved = results.every((row) => row.applied);
+      if (resolved)
+        await writeFileAtomic(
+          this.decisionFile(w, r.taskId),
+          JSON.stringify({
+            decision: r.action === "cancel" ? "cancelled" : "confirmed",
+          }),
+        );
+      return { results, resolved };
+    });
   }
   async summary(): Promise<GenerateSummaryDto> {
     const w = this.current();
@@ -313,6 +523,13 @@ export class GenerateService {
           kind: spec.type === "generate_title" ? "title" : "summary",
           state,
           chapterIds: spec.chapterIds,
+          createdAt: spec.createdAt,
+          activityAt:
+            Object.values(store.snapshot.chapters)
+              .map((c) => c.updatedAt)
+              .sort()
+              .at(-1) ?? spec.createdAt,
+          batchConfirmation: spec.options.batchConfirmation === true,
         });
       } catch {}
     }

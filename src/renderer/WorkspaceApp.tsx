@@ -195,13 +195,9 @@ export function WorkspaceApp({
       return !!saved && latest.current.draft === saved.body;
     },
     onTitleUpdated: (view) => {
-      if (
-        latest.current.info.workspaceId !== info.workspaceId ||
-        latest.current.activeId !== view.chapterId
-      )
-        return;
+      if (latest.current.info.workspaceId !== info.workspaceId) return;
       setChapter((current) =>
-        current
+        current && current.chapterId === view.chapterId
           ? {
               ...current,
               title: view.currentTitle,
@@ -367,7 +363,9 @@ export function WorkspaceApp({
     try {
       await cancelWorkspaceTasks();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "任务尚未停止，请稍后重试。");
+      setMessage(
+        error instanceof Error ? error.message : "任务尚未停止，请稍后重试。",
+      );
       return;
     }
     if (action.kind === "quit") {
@@ -416,11 +414,16 @@ export function WorkspaceApp({
     void runAction(action);
   }
 
-  useEffect(() => window.desktop.lifecycle.onCloseRequested(() => {
-    const value = latest.current;
-    if (value.chapter && value.draft !== value.chapter.body) setPending({ kind: "quit" });
-    else void runAction({ kind: "quit" });
-  }), []);
+  useEffect(
+    () =>
+      window.desktop.lifecycle.onCloseRequested(() => {
+        const value = latest.current;
+        if (value.chapter && value.draft !== value.chapter.body)
+          setPending({ kind: "quit" });
+        else void runAction({ kind: "quit" });
+      }),
+    [],
+  );
 
   async function resolvePending(choice: "save" | "discard") {
     if (choice === "save") {
@@ -817,7 +820,13 @@ export function WorkspaceApp({
                   ? "精校默认只提候选，采纳或忽略由你决定；自动应用默认关闭。"
                   : "生成基于已保存正文；候选标题由你选择，摘要独立保存。"}
             </p>
-            <PipelinePanel workspaceId={info.workspaceId} chapterIds={formatIds} dirty={dirty} onMessage={setMessage} onUpdated={proofread.refresh} />
+            <PipelinePanel
+              workspaceId={info.workspaceId}
+              chapterIds={formatIds}
+              dirty={dirty}
+              onMessage={setMessage}
+              onUpdated={proofread.refresh}
+            />
           </aside>
         </div>
 
@@ -837,6 +846,7 @@ export function WorkspaceApp({
         </footer>
       </section>
 
+      {generate.batchDialog}
       <dialog
         ref={unsavedDialog}
         className="bb-config bb-confirm"

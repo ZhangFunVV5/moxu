@@ -7,6 +7,7 @@ import {
   createWorkspace,
   readChapterFile,
   saveChapterBody,
+  renameChapter,
 } from "../src/core/workspace/book-store";
 import { buildTaskSpec } from "../src/agent/tasks/task-types";
 import { TaskStore } from "../src/agent/tasks/task-store";
@@ -601,5 +602,311 @@ test("P4 模型或 Profile 改变后拒绝继续旧任务", async (t) => {
       f.chapters[0].chapterId,
     ).status,
     "queued",
+  );
+});
+
+test("T077–T079 batch identity, ordered progress, selected apply and retry receipt", async (t) => {
+  const f = await fixture(t, "他们走进树林。", 3);
+  const ws = {
+    currentWorkspace: () => f.workspace,
+    updateChapterCache: () => {},
+  } as unknown as WorkspaceService;
+  const counts: number[] = [];
+  const model: Adapter = {
+    async complete(messages) {
+      if (messages.at(-1)?.role === "tool")
+        return { content: "完成", calls: [], finishReason: "stop" };
+      const p = JSON.parse(messages[1].content!);
+      counts.push(p.options.candidateCount);
+      return {
+        content: "",
+        calls: [
+          {
+            id: "batch",
+            type: "function",
+            function: {
+              name: "submit_titles",
+              arguments: JSON.stringify({
+                chapterId: p.chapterId,
+                inputHash: p.inputHash,
+                titles: ["林间足迹", "树林风声", "踏入树林"].slice(
+                  0,
+                  p.options.candidateCount,
+                ),
+              }),
+            },
+          },
+        ],
+        finishReason: "tool_calls",
+      };
+    },
+  };
+  const service = new GenerateService(
+    ws,
+    new TaskService(ws),
+    async () => model,
+  );
+  const start = async (ids: string[]) => {
+    let finish!: () => void;
+    const done = new Promise<void>((resolve) => (finish = resolve));
+    const off = service.onEvent((e) => {
+      if (e.type === "taskStateChanged") finish();
+    });
+    const r = await service.start({
+      kind: "title",
+      chapterIds: ids,
+      options: DEFAULT_TITLE_OPTIONS,
+    });
+    await done;
+    off();
+    return r.taskId;
+  };
+  const taskId = await start([...f.spec.chapterIds].reverse());
+  assert.deepEqual(counts, [1, 1, 1]);
+  const result = await service.taskResult(taskId);
+  assert.deepEqual(
+    result.rows.map((r) => r.chapterId),
+    f.spec.chapterIds,
+  );
+  assert.equal(result.succeeded, 3);
+  assert.equal(result.decision, "pending");
+  const row = result.rows[0];
+  const selection = {
+    chapterId: row.chapterId,
+    artifactId: row.artifactId!,
+    candidateIndex: 0,
+    expectedBodyHash: row.bodyHash,
+    expectedTitleRevision: row.titleRevision,
+  };
+  await assert.rejects(
+    service.applyBatch({
+      workspaceId: f.spec.workspaceId,
+      taskId,
+      action: "confirm",
+      selections: [{ ...selection, candidateIndex: -1 }],
+    }),
+  );
+  // Break the secondary selection audit; the chapter receipt remains authoritative.
+  await fs.mkdir(
+    path.join(f.workspace.root, "generated", `selection-${row.chapterId}.json`),
+  );
+  const applied = await service.applyBatch({
+    workspaceId: f.spec.workspaceId,
+    taskId,
+    action: "confirm",
+    selections: [selection],
+  });
+  assert.equal(applied.results[0].applied, true);
+  const chapter = await readChapterFile(
+    f.workspace.root,
+    f.workspace.book,
+    row.chapterId,
+  );
+  assert.equal(chapter.titleRevision, row.titleRevision + 1);
+  assert.equal(chapter.bodyHash, row.bodyHash);
+  assert.equal(chapter.bodyRevision, f.chapters[0].bodyRevision);
+  const retry = await service.applyBatch({
+    workspaceId: f.spec.workspaceId,
+    taskId,
+    action: "confirm",
+    selections: [selection],
+  });
+  assert.equal(retry.resolved, true);
+  assert.equal(
+    (await readChapterFile(f.workspace.root, f.workspace.book, row.chapterId))
+      .titleRevision,
+    chapter.titleRevision,
+  );
+  assert.equal(
+    (
+      await readChapterFile(
+        f.workspace.root,
+        f.workspace.book,
+        f.spec.chapterIds[1],
+      )
+    ).title.current,
+    f.chapters[1].title.current,
+  );
+  await start([f.spec.chapterIds[1]]);
+  assert.equal(counts.at(-1), 3);
+});
+
+test("T078–T079 partial failure, decision reset, stale conflicts and write failure results", async (t) => {
+  const f = await fixture(t, "他们走进树林。", 3);
+  let current = f.workspace;
+  let fail = true;
+  const ws = {
+    currentWorkspace: () => current,
+    updateChapterCache: () => {},
+  } as unknown as WorkspaceService;
+  const model: Adapter = {
+    async complete(messages) {
+      if (messages.at(-1)?.role === "tool")
+        return { content: "完成", calls: [], finishReason: "stop" };
+      const p = JSON.parse(messages[1].content!);
+      if (fail && p.chapterId === f.spec.chapterIds[1])
+        return { content: "失败", calls: [], finishReason: "stop" };
+      return {
+        content: "",
+        calls: [
+          {
+            id: "test",
+            type: "function",
+            function: {
+              name: "submit_titles",
+              arguments: JSON.stringify({
+                chapterId: p.chapterId,
+                inputHash: p.inputHash,
+                titles: ["林间足迹"],
+              }),
+            },
+          },
+        ],
+        finishReason: "tool_calls",
+      };
+    },
+  };
+  const service = new GenerateService(
+    ws,
+    new TaskService(ws),
+    async () => model,
+  );
+  const terminal = () =>
+    new Promise<void>((resolve) => {
+      const off = service.onEvent((e) => {
+        if (e.type === "taskStateChanged") {
+          off();
+          resolve();
+        }
+      });
+    });
+  let done = terminal();
+  const { taskId } = await service.start({
+    kind: "title",
+    chapterIds: f.spec.chapterIds,
+    options: DEFAULT_TITLE_OPTIONS,
+  });
+  await done;
+  let result = await service.taskResult(taskId);
+  assert.equal(result.succeeded, 2);
+  assert.equal(result.failed, 1);
+  const select = (row: (typeof result.rows)[number]) => ({
+    chapterId: row.chapterId,
+    artifactId: row.artifactId!,
+    candidateIndex: 0,
+    expectedBodyHash: row.bodyHash,
+    expectedTitleRevision: row.titleRevision,
+  });
+  const confirm = (selections: ReturnType<typeof select>[]) =>
+    service.applyBatch({
+      workspaceId: f.spec.workspaceId,
+      taskId,
+      action: "confirm",
+      selections,
+    });
+  const first = result.rows[0];
+  assert.equal(
+    (await confirm([{ ...select(first), expectedBodyHash: "0".repeat(64) }]))
+      .results[0].applied,
+    false,
+  );
+  assert.equal(
+    (
+      await confirm([
+        { ...select(first), expectedTitleRevision: first.titleRevision + 1 },
+      ])
+    ).results[0].applied,
+    false,
+  );
+  const decision = await confirm([select(first)]);
+  assert.equal(decision.resolved, true);
+  fail = false;
+  done = terminal();
+  await service.resume(taskId);
+  await done;
+  result = await service.taskResult(taskId);
+  assert.equal(result.succeeded, 3);
+  assert.equal(result.decision, "pending");
+  assert.equal(
+    (await TaskStore.open(f.workspace.root, taskId)).getCheckpoint(
+      first.chapterId,
+    ).attempt,
+    1,
+  );
+  const rename = fs.rename;
+  const brokenId = result.rows[2].chapterId;
+  const mock = t.mock.method(
+    fs,
+    "rename",
+    async (
+      source: Parameters<typeof fs.rename>[0],
+      target: Parameters<typeof fs.rename>[1],
+    ) => {
+      if (String(target).endsWith(`chapters${path.sep}${brokenId}.json`))
+        throw Object.assign(new Error("injected chapter write failure"), {
+          code: "EIO",
+        });
+      return rename(source, target);
+    },
+  );
+  const partial = await confirm(result.rows.map(select));
+  assert.deepEqual(
+    partial.results.map((r) => r.applied),
+    [true, true, false],
+  );
+  assert.equal(partial.resolved, false);
+  mock.mock.restore();
+  const retry = await confirm(result.rows.map(select));
+  assert.equal(retry.resolved, true);
+  assert.equal(
+    (await readChapterFile(f.workspace.root, f.workspace.book, first.chapterId))
+      .titleRevision,
+    first.titleRevision + 1,
+  );
+  await assert.rejects(
+    service.applyBatch({
+      workspaceId: "00000000-0000-4000-8000-000000000000",
+      taskId,
+      action: "cancel",
+      selections: [],
+    }),
+  );
+  const summarySpec = buildTaskSpec({
+    workspaceId: f.spec.workspaceId,
+    type: "generate_summary",
+    chapterIds: f.spec.chapterIds,
+    inputHashes: f.spec.inputHashes,
+    options: f.spec.options,
+    profileVersion: f.spec.profileVersion,
+  });
+  await TaskStore.create(f.workspace.root, summarySpec);
+  await assert.rejects(service.taskResult(summarySpec.taskId));
+  done = terminal();
+  const changed = await service.start({
+    kind: "title",
+    chapterIds: f.spec.chapterIds,
+    options: DEFAULT_TITLE_OPTIONS,
+  });
+  await done;
+  const beforeRename = await service.taskResult(changed.taskId);
+  await renameChapter(f.workspace.root, first.chapterId, "自定义新标题");
+  const afterRename = await service.taskResult(changed.taskId);
+  assert.equal(afterRename.rows[0].stale, true);
+  const conflict = await service.applyBatch({
+    workspaceId: f.spec.workspaceId,
+    taskId: changed.taskId,
+    action: "confirm",
+    selections: [
+      {
+        ...select(beforeRename.rows[0]),
+        expectedTitleRevision: afterRename.rows[0].titleRevision,
+      },
+    ],
+  });
+  assert.equal(conflict.results[0].applied, false);
+  assert.equal(
+    (await readChapterFile(f.workspace.root, f.workspace.book, first.chapterId))
+      .title.current,
+    "自定义新标题",
   );
 });

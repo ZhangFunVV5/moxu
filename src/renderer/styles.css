@@ -1373,3 +1373,51 @@ body {
 #book-agent-blue .bb-pipeline .bb-field { display: grid; gap: 8px; margin: 12px 0; }
 
 #book-agent-blue .bb-task-activity { max-height: 320px; overflow: auto; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+
+#book-agent-blue .bb-batch-dialog {
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: inherit;
+  background: var(--surface);
+  box-sizing: border-box;
+}
+#book-agent-blue .bb-batch-dialog::backdrop {
+  background: rgb(23 43 77 / 25%);
+}
+#book-agent-blue .bb-batch-list {
+  max-height: min(55vh, 480px);
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+#book-agent-blue .bb-batch-row {
+  display: grid;
+  grid-template-columns: 20px auto 1fr;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+#book-agent-blue .bb-batch-actions {
+  padding-top: 16px;
+}
+#book-agent-blue .bb-batch-progress progress {
+  width: 100%;
+  accent-color: var(--primary);
+}
+
+#book-agent-blue .bb-batch-dialog[open] {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#book-agent-blue .bb-batch-list {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+#book-agent-blue .bb-batch-actions {
+  flex: 0 0 auto;
+}
